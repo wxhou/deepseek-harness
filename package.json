@@ -140,12 +140,17 @@
     "demo:acp": "node --import tsx packages/examples/acp-demo/src/bin.ts --config examples/acp-agent/cordis.yml",
     "mock:llm": "node --import tsx packages/test-support/llm-mock-server/src/bin.ts",
     "dev:web": "tsx scripts/dev-web.ts --poll",
-    "postinstall": "node scripts/install-lefthook.mjs"
+    "desktop:sidecar": "node scripts/build-desktop-sidecar.mjs",
+    "desktop:dev": "node scripts/build-desktop-sidecar.mjs && cargo run --manifest-path desktop/src-tauri/Cargo.toml",
+    "desktop:build": "npm_config_verify_deps_before_run=false node scripts/build-desktop-app.mjs",
+    "postinstall": "node scripts/install-lefthook.mjs",
+    "desktop:runtime": "rm -rf desktop/runtime-dist && pnpm --filter dsh-desktop-runtime deploy --prod --legacy desktop/runtime-dist"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "0.25.1",
     "@deepseek-ai/dsh-tool-session-query": "workspace:^",
     "@stylistic/eslint-plugin": "^5.10.0",
+    "@tauri-apps/cli": "^2.11.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/js-yaml": "^4.0.9",
@@ -171,6 +176,7 @@
     "micromark-extension-gfm": "^3.0.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
+    "postject": "1.0.0-alpha.6",
     "publint": "^0.3.21",
     "smol-toml": "^1.7.1",
     "spdx-expression-parse": "^5.0.0",

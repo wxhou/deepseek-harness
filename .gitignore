@@ -38,3 +38,12 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# Desktop shell build artifacts (see desktop/README.md)
+desktop/bin/
+desktop/build/
+desktop/src-tauri/target/
+
+# Desktop runtime deploy and distribution outputs
+desktop/runtime-dist/
+desktop/dist/

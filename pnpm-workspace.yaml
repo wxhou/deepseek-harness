@@ -19,6 +19,10 @@ packages:
   # Deploy root of the single-exe build: a pure dependency manifest whose
   # closure is what the exe bundles and what the Python runtime distributes.
   - python/sdk-runtime
+  # Desktop runtime deploy root, same pattern as python/sdk-runtime: its
+  # closure is the node_modules the .app bundles for the SEA sidecar's
+  # runtime plugin resolution (see desktop/README.md).
+  - desktop/runtime
 
 # Vendored framework packages keep their upstream semver ranges, while local
 # builds must resolve those matching names to this workspace's pinned sources.
