@@ -1,25 +1,27 @@
 /**
  * Produce the distributable dsh desktop artifact: run the desktop build chain
- * and package the re-signed .app into a versioned, arch-tagged zip.
+ * and package the re-signed .app into a versioned, arch-tagged zip and DMG.
  *
  * Chain: entry gates → `pnpm run build` → `pnpm run desktop:runtime` →
- * `pnpm run desktop:build` → ditto zip → expand-and-verify. Each package
- * script is spawned through pnpm so its env prefix stays with its owner
- * (`desktop:build` carries its own `npm_config_verify_deps_before_run=false`).
+ * `pnpm run desktop:build` → ditto zip → ditto verify → hdiutil DMG.
+ * Each package script is spawned through pnpm so its env prefix stays with its
+ * owner (`desktop:build` carries its own `npm_config_verify_deps_before_run=false`).
  *
  * The zip is cut from the re-signed .app with `ditto -c -k --keepParent`:
  * tauri's own bundling runs before the runtime injection and the re-sign, and
  * plain `zip -r` dereferences the pnpm symlink layout inside the runtime
- * tree. The contract is `openspec/changes/add-desktop-dist/` (spec
- * `desktop-dist`).
+ * tree. The DMG is cut with `hdiutil create` from a staging folder that
+ * includes an `/Applications` symlink for drag-and-drop installation.
+ * The contract is `openspec/changes/add-desktop-dist/` (spec `desktop-dist`).
  *
  * Usage: `node scripts/build-desktop-dist.mjs [--skip-build]`; `--skip-build`
  * reuses existing lib/ artifacts without re-running `pnpm run build`.
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -83,7 +85,7 @@ function cargoVersion() {
   fail(`no [package] version key in ${cargoTomlPath}`)
 }
 
-console.log('[1/6] entry gates')
+console.log('[1/7] entry gates')
 const version = tauriVersion()
 const cargo = cargoVersion()
 if (version !== cargo) {
@@ -103,7 +105,7 @@ if (skipBuild && !existsSync(cliLibEntry)) {
   fail(`--skip-build requires built lib/ artifacts; ${cliLibEntry} is missing — run without the flag`)
 }
 
-console.log('[2/6] building workspace libraries')
+console.log('[2/7] building workspace libraries')
 // CI keeps every nested pnpm non-interactive (a purge confirmation aborts
 // without a TTY), and the disabled deps-status pre-check stops pnpm from
 // "fixing" the modules state a previous deploy deliberately rewrote — the
@@ -116,17 +118,17 @@ const pnpmEnv = {
 if (skipBuild) console.log('skipping pnpm run build (--skip-build)')
 else run('pnpm', ['run', 'build'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[3/6] deploying the runtime')
+console.log('[3/7] deploying the runtime')
 run('pnpm', ['run', 'desktop:runtime'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[4/6] assembling the .app')
+console.log('[4/7] assembling the .app')
 run('pnpm', ['run', 'desktop:build'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[5/6] zipping the re-signed .app')
+console.log('[5/7] zipping the re-signed .app')
 const zipPath = join(distDir, `dsh-desktop_${version}_${process.arch}.zip`)
 run('ditto', ['-c', '-k', '--keepParent', appBundle, zipPath])
 
-console.log('[6/6] verifying the archive')
+console.log('[6/7] verifying the archive')
 const expandDir = join(distDir, 'verify-expand')
 let verifyError
 try {
@@ -166,8 +168,30 @@ try {
 }
 if (verifyError !== undefined) fail(verifyError.message)
 
-const size = spawnSync('du', ['-sh', zipPath], { encoding: 'utf8' })
-const checksum = spawnSync('shasum', ['-a', '256', zipPath], { encoding: 'utf8' })
-console.log(`build-desktop-dist: ok → ${zipPath} (${size.stdout.trim().split('\t')[0]})`)
-console.log(`sha256: ${checksum.stdout.trim().split(/\s+/)[0]}`)
-console.log('unsigned build: receivers bypass Gatekeeper per desktop/README.md#distribution (right-click → Open, or xattr -dr com.apple.quarantine)')
+console.log('[7/7] creating the DMG')
+// Stage the .app alongside an /Applications symlink for drag-to-Install.
+const dmgStaging = mkdtempSync(join(tmpdir(), 'dsh-desktop-dmg-'))
+const dmgAppDir = join(dmgStaging, 'dsh-desktop.app')
+const dmgAppsLink = join(dmgStaging, 'Applications')
+try {
+  run('ditto', [appBundle, dmgAppDir])
+  symlinkSync('/Applications', dmgAppsLink)
+  const dmgPath = join(distDir, `dsh-desktop_${version}_${process.arch}.dmg`)
+  run('hdiutil', [
+    'create', '-volname', 'dsh-desktop', '-srcfolder', dmgStaging,
+    '-ov', '-format', 'UDZO', dmgPath,
+  ])
+} finally {
+  rmSync(dmgStaging, { recursive: true, force: true })
+}
+
+const sizeZip = spawnSync('du', ['-sh', zipPath], { encoding: 'utf8' })
+const checksumZip = spawnSync('shasum', ['-a', '256', zipPath], { encoding: 'utf8' })
+const dmgPath = join(distDir, `dsh-desktop_${version}_${process.arch}.dmg`)
+const sizeDmg = spawnSync('du', ['-sh', dmgPath], { encoding: 'utf8' })
+const checksumDmg = spawnSync('shasum', ['-a', '256', dmgPath], { encoding: 'utf8' })
+console.log(`build-desktop-dist: ok → ${zipPath} (${sizeZip.stdout.trim().split('\t')[0]})`)
+console.log(`sha256: ${checksumZip.stdout.trim().split(/\s+/)[0]}`)
+console.log(`build-desktop-dist: ok → ${dmgPath} (${sizeDmg.stdout.trim().split('\t')[0]})`)
+console.log(`sha256: ${checksumDmg.stdout.trim().split(/\s+/)[0]}`)
+console.log('unsigned build: receivers bypass Gatekeeper per desktop/README.md#distribution (right-click → Open, or xattr -cr com.apple.quarantine)')

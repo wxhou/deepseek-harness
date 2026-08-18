@@ -73,20 +73,33 @@ key or a local Ollama, configured in `~/.dsh/settings.yaml`).
 
 ## Distribution
 
-`pnpm run desktop:dist` runs the whole chain — workspace build, runtime deploy, app assembly — and packages the re-signed `.app` into `desktop/dist/dsh-desktop_<version>_<arch>.zip` with `ditto -c -k --keepParent`, which preserves the runtime's pnpm symlink layout (tauri's own bundling runs before the runtime injection). It refuses to run unless the versions in `tauri.conf.json` and `src-tauri/Cargo.toml` agree and the host is x64; `--skip-build` reuses existing `lib/` artifacts.
+`pnpm run desktop:dist` runs the whole chain — workspace build, runtime deploy, app assembly — and packages the re-signed `.app` into `desktop/dist/dsh-desktop_<version>_<arch>.zip` and `.dmg`. The zip uses `ditto -c -k --keepParent`, which preserves the runtime's pnpm symlink layout (tauri's own bundling runs before the runtime injection). The DMG uses `hdiutil create` from a staging folder that includes an `/Applications` symlink for drag-to-drop installation. The script refuses to run unless the versions in `tauri.conf.json` and `src-tauri/Cargo.toml` agree and the host is x64; `--skip-build` reuses existing `lib/` artifacts.
 
 The build is unsigned. Publish it on a real Intel Mac:
 
 ```sh
-shasum -a 256 desktop/dist/dsh-desktop_*.zip   # dist prints this; paste it into the release notes
-gh release create desktop-v<version> desktop/dist/dsh-desktop_<version>_x64.zip
+shasum -a 256 desktop/dist/dsh-desktop_*.{zip,dmg}   # dist prints this; paste into release notes
+gh release create desktop-v<version> \
+  desktop/dist/dsh-desktop_<version>_x64.zip \
+  desktop/dist/dsh-desktop_<version>_x64.dmg
 ```
 
 Release tags carry the `desktop-v` prefix, keeping the desktop series separate from the npm release tags. A receiver verifies the download and passes the unsigned-build Gatekeeper block:
 
+**DMG** (recommended — drag to Applications, then right-click → Open):
+
+```sh
+hdiutil attach dsh-desktop_<version>_x64.dmg
+cp -R /Volumes/dsh-desktop/dsh-desktop.app /Applications/
+hdiutil detach /Volumes/dsh-desktop
+```
+
+**Zip**:
+
 ```sh
 shasum -a 256 dsh-desktop_<version>_x64.zip    # compare against the release notes
-xattr -dr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click → Open in Finder
+ditto -x -k dsh-desktop_<version>_x64.zip /Applications/
+xattr -cr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click → Open in Finder
 ```
 
 ## Known Limitations and Deferred Work
@@ -94,9 +107,10 @@ xattr -dr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click 
 - **macOS only** in the MVP; Windows/Linux shells and the platform matrix are
   deferred. The Linux port must ship native addons beside the executable (SEA
   cannot embed them).
-- **Unsigned zip distribution**: `desktop:dist` packages the ad-hoc-signed
-  `.app` (see the Distribution section); code signing, notarization, and
-  auto-update remain missing, so receivers bypass Gatekeeper manually.
+- **Unsigned distribution**: `desktop:dist` packages the ad-hoc-signed
+  `.app` into zip and DMG (see the Distribution section); code signing,
+  notarization, and auto-update remain missing, so receivers bypass Gatekeeper
+  manually (right-click → Open, or `xattr -cr com.apple.quarantine`).
 - **Client-side persisted state resets when the fixed port is unavailable**:
   localStorage is keyed by origin, so a launch that falls back to an
   OS-assigned port starts with empty drafts and view state (the spec marks
