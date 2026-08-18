@@ -143,8 +143,9 @@
     "desktop:sidecar": "node scripts/build-desktop-sidecar.mjs",
     "desktop:dev": "node scripts/build-desktop-sidecar.mjs && cargo run --manifest-path desktop/src-tauri/Cargo.toml",
     "desktop:build": "npm_config_verify_deps_before_run=false node scripts/build-desktop-app.mjs",
+    "desktop:dist": "node scripts/build-desktop-dist.mjs",
     "postinstall": "node scripts/install-lefthook.mjs",
-    "desktop:runtime": "rm -rf desktop/runtime-dist && pnpm --filter dsh-desktop-runtime deploy --prod --legacy desktop/runtime-dist"
+    "desktop:runtime": "rm -rf desktop/runtime-dist desktop/runtime/node_modules && pnpm --filter dsh-desktop-runtime deploy --prod --legacy --config.ignore-scripts=true desktop/runtime-dist && CI=true pnpm install"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "0.25.1",

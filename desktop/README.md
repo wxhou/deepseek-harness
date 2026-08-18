@@ -38,6 +38,7 @@ pnpm run desktop:runtime   # deploy the production node_modules → desktop/runt
 pnpm run desktop:sidecar   # build:lib + bake the SEA sidecar into desktop/bin/
 pnpm run desktop:dev       # sidecar + cargo run (debug shell)
 pnpm run desktop:build     # sidecar + tauri build + ditto-inject the runtime → self-contained .app
+pnpm run desktop:dist      # the full chain + zip → desktop/dist/dsh-desktop_<version>_<arch>.zip
 ```
 
 Iterating on the shell only: `node scripts/build-desktop-sidecar.mjs --no-build`
@@ -70,13 +71,32 @@ plugin imports resolve entirely within the bundle. The .app therefore runs on
 a machine without the repo checkout (it still needs a model: a DeepSeek API
 key or a local Ollama, configured in `~/.dsh/settings.yaml`).
 
+## Distribution
+
+`pnpm run desktop:dist` runs the whole chain — workspace build, runtime deploy, app assembly — and packages the re-signed `.app` into `desktop/dist/dsh-desktop_<version>_<arch>.zip` with `ditto -c -k --keepParent`, which preserves the runtime's pnpm symlink layout (tauri's own bundling runs before the runtime injection). It refuses to run unless the versions in `tauri.conf.json` and `src-tauri/Cargo.toml` agree and the host is x64; `--skip-build` reuses existing `lib/` artifacts.
+
+The build is unsigned. Publish it on a real Intel Mac:
+
+```sh
+shasum -a 256 desktop/dist/dsh-desktop_*.zip   # dist prints this; paste it into the release notes
+gh release create desktop-v<version> desktop/dist/dsh-desktop_<version>_x64.zip
+```
+
+Release tags carry the `desktop-v` prefix, keeping the desktop series separate from the npm release tags. A receiver verifies the download and passes the unsigned-build Gatekeeper block:
+
+```sh
+shasum -a 256 dsh-desktop_<version>_x64.zip    # compare against the release notes
+xattr -dr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click → Open in Finder
+```
+
 ## Known Limitations and Deferred Work
 
 - **macOS only** in the MVP; Windows/Linux shells and the platform matrix are
   deferred. The Linux port must ship native addons beside the executable (SEA
   cannot embed them).
-- **No distribution**: no signing, notarization, or auto-update. `desktop:build`
-  produces an unsigned local `.app`.
+- **Unsigned zip distribution**: `desktop:dist` packages the ad-hoc-signed
+  `.app` (see the Distribution section); code signing, notarization, and
+  auto-update remain missing, so receivers bypass Gatekeeper manually.
 - **Client-side persisted state resets when the fixed port is unavailable**:
   localStorage is keyed by origin, so a launch that falls back to an
   OS-assigned port starts with empty drafts and view state (the spec marks

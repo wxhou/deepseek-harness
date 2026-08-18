@@ -14,7 +14,16 @@ import {
 } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import lefthookPackage from 'lefthook/package.json' with { type: 'json' }
+// A production install (pnpm deploy's workspace-wide --prod install runs root
+// postinstalls) has no devDependencies: lefthook's absence names that tree,
+// and with no lefthook there are no hooks to configure, so main() skips.
+// Any other failure — syntax, permissions — is not this case and propagates.
+let lefthookPackage
+try {
+  lefthookPackage = (await import('lefthook/package.json', { with: { type: 'json' } })).default
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND' || !String(error?.message).includes('lefthook')) throw error
+}
 
 const MINIMUM_GIT = [2, 26, 0]
 const HOOKS_DIRECTORY = 'dsh-hooks'
@@ -690,7 +699,7 @@ function probePairingMergeDriver(root) {
 
 async function main() {
   if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') return
-  if (typeof lefthookPackage.bin?.lefthook !== 'string') return
+  if (lefthookPackage === undefined || typeof lefthookPackage.bin?.lefthook !== 'string') return
   const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
   if (probe.status !== 0) return
   const root = stripGitLineTerminator(probe.stdout)
