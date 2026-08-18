@@ -38,7 +38,7 @@ pnpm run desktop:runtime   # deploy the production node_modules → desktop/runt
 pnpm run desktop:sidecar   # build:lib + bake the SEA sidecar into desktop/bin/
 pnpm run desktop:dev       # sidecar + cargo run (debug shell)
 pnpm run desktop:build     # sidecar + tauri build + ditto-inject the runtime → self-contained .app
-pnpm run desktop:dist      # the full chain + zip → desktop/dist/dsh-desktop_<version>_<arch>.zip
+pnpm run desktop:dist      # the full chain → desktop/dist/dsh-desktop_<version>_<arch>.dmg
 ```
 
 Iterating on the shell only: `node scripts/build-desktop-sidecar.mjs --no-build`
@@ -73,32 +73,22 @@ key or a local Ollama, configured in `~/.dsh/settings.yaml`).
 
 ## Distribution
 
-`pnpm run desktop:dist` runs the whole chain — workspace build, runtime deploy, app assembly — and packages the re-signed `.app` into `desktop/dist/dsh-desktop_<version>_<arch>.zip` and `.dmg`. The zip uses `ditto -c -k --keepParent`, which preserves the runtime's pnpm symlink layout (tauri's own bundling runs before the runtime injection). The DMG uses `hdiutil create` from a staging folder that includes an `/Applications` symlink for drag-to-drop installation. The script refuses to run unless the versions in `tauri.conf.json` and `src-tauri/Cargo.toml` agree and the host is x64; `--skip-build` reuses existing `lib/` artifacts.
+`pnpm run desktop:dist` runs the whole chain — workspace build, runtime deploy, app assembly — and packages the re-signed `.app` into `desktop/dist/dsh-desktop_<version>_<arch>.dmg`. The DMG uses `hdiutil create` from a staging folder that includes an `/Applications` symlink for drag-to-drop installation. The script refuses to run unless the versions in `tauri.conf.json` and `src-tauri/Cargo.toml` agree and the host is x64; `--skip-build` reuses existing `lib/` artifacts.
 
 The build is unsigned. Publish it on a real Intel Mac:
 
 ```sh
-shasum -a 256 desktop/dist/dsh-desktop_*.{zip,dmg}   # dist prints this; paste into release notes
-gh release create desktop-v<version> \
-  desktop/dist/dsh-desktop_<version>_x64.zip \
-  desktop/dist/dsh-desktop_<version>_x64.dmg
+shasum -a 256 desktop/dist/dsh-desktop_*.dmg   # dist prints this; paste into release notes
+gh release create desktop-v<version> desktop/dist/dsh-desktop_<version>_x64.dmg
 ```
 
 Release tags carry the `desktop-v` prefix, keeping the desktop series separate from the npm release tags. A receiver verifies the download and passes the unsigned-build Gatekeeper block:
 
-**DMG** (recommended — drag to Applications, then right-click → Open):
-
 ```sh
+shasum -a 256 dsh-desktop_<version>_x64.dmg    # compare against the release notes
 hdiutil attach dsh-desktop_<version>_x64.dmg
 cp -R /Volumes/dsh-desktop/dsh-desktop.app /Applications/
 hdiutil detach /Volumes/dsh-desktop
-```
-
-**Zip**:
-
-```sh
-shasum -a 256 dsh-desktop_<version>_x64.zip    # compare against the release notes
-ditto -x -k dsh-desktop_<version>_x64.zip /Applications/
 xattr -cr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click → Open in Finder
 ```
 
@@ -108,7 +98,7 @@ xattr -cr com.apple.quarantine /Applications/dsh-desktop.app   # or right-click 
   deferred. The Linux port must ship native addons beside the executable (SEA
   cannot embed them).
 - **Unsigned distribution**: `desktop:dist` packages the ad-hoc-signed
-  `.app` into zip and DMG (see the Distribution section); code signing,
+  `.app` into a DMG (see the Distribution section); code signing,
   notarization, and auto-update remain missing, so receivers bypass Gatekeeper
   manually (right-click → Open, or `xattr -cr com.apple.quarantine`).
 - **Client-side persisted state resets when the fixed port is unavailable**:

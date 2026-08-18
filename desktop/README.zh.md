@@ -32,7 +32,7 @@ pnpm run desktop:runtime   # deploy the production node_modules → desktop/runt
 pnpm run desktop:sidecar   # build:lib + bake the SEA sidecar into desktop/bin/
 pnpm run desktop:dev       # sidecar + cargo run (debug shell)
 pnpm run desktop:build     # sidecar + tauri build + ditto-inject the runtime → self-contained .app
-pnpm run desktop:dist      # the full chain + zip → desktop/dist/dsh-desktop_<version>_<arch>.zip
+pnpm run desktop:dist      # the full chain → desktop/dist/dsh-desktop_<version>_<arch>.dmg
 ```
 
 只迭代壳代码时：`node scripts/build-desktop-sidecar.mjs --no-build` 复用已有的 `apps/cli/lib/bin.js`。
@@ -47,39 +47,29 @@ pnpm run desktop:dist      # the full chain + zip → desktop/dist/dsh-desktop_<
 
 ## 分发
 
-`pnpm run desktop:dist` 跑完整条链——workspace 构建、runtime 部署、.app 组装——再把重签名后的 `.app` 打成 `desktop/dist/dsh-desktop_<version>_<arch>.zip` 和 `.dmg`。zip 用 `ditto -c -k --keepParent`（保真 runtime 的 pnpm 符号链接布局；tauri 自身的打包发生在 runtime 注入之前）。DMG 用 `hdiutil create` 从包含 `/Applications` 符号链接的暂存目录生成，支持拖拽安装。`tauri.conf.json` 与 `src-tauri/Cargo.toml` 版本不一致、或宿主不是 x64 时直接失败；`--skip-build` 复用已有的 `lib/` 产物。
+`pnpm run desktop:dist` 跑完整条链——workspace 构建、runtime 部署、.app 组装——再把重签名后的 `.app` 打成 `desktop/dist/dsh-desktop_<version>_<arch>.dmg`。DMG 用 `hdiutil create` 从包含 `/Applications` 符号链接的暂存目录生成，支持拖拽安装。`tauri.conf.json` 与 `src-tauri/Cargo.toml` 版本不一致、或宿主不是 x64 时直接失败；`--skip-build` 复用已有的 `lib/` 产物。
 
 构建产物未签名。发布（在真 Intel Mac 上执行）：
 
 ```sh
-shasum -a 256 desktop/dist/dsh-desktop_*.{zip,dmg}   # dist prints this; paste into release notes
-gh release create desktop-v<version> \
-  desktop/dist/dsh-desktop_<version>_x64.zip \
-  desktop/dist/dsh-desktop_<version>_x64.dmg
+shasum -a 256 desktop/dist/dsh-desktop_*.dmg   # dist 打印；贴入 release notes
+gh release create desktop-v<version> desktop/dist/dsh-desktop_<version>_x64.dmg
 ```
 
 Release tag 带 `desktop-v` 前缀，与 npm release tag 序列区分。接收方验证下载并通过未签名构建的 Gatekeeper 拦截：
 
-**DMG**（推荐——拖入 Applications 后右键 → 打开）：
-
 ```sh
+shasum -a 256 dsh-desktop_<version>_x64.dmg    # 与 release notes 对比
 hdiutil attach dsh-desktop_<version>_x64.dmg
 cp -R /Volumes/dsh-desktop/dsh-desktop.app /Applications/
 hdiutil detach /Volumes/dsh-desktop
-```
-
-**Zip**：
-
-```sh
-shasum -a 256 dsh-desktop_<version>_x64.zip    # 与 release notes 对比
-ditto -x -k dsh-desktop_<version>_x64.zip /Applications/
 xattr -cr com.apple.quarantine /Applications/dsh-desktop.app   # 或在 Finder 中右键 → 打开
 ```
 
 ## 已知限制与延后工作
 
 - **仅 macOS**（MVP）；Windows/Linux 壳与平台矩阵延后。Linux 移植必须在可执行文件旁附带原生 addon（SEA 无法内嵌）。
-- **未签名分发**：`desktop:dist` 将 ad-hoc 签名的 `.app` 打成 zip 和 DMG（见「分发」一节）；代码签名、公证和自动更新尚缺，接收方需手动绕过 Gatekeeper（右键 → 打开，或 `xattr -cr com.apple.quarantine`）。
+- **未签名分发**：`desktop:dist` 将 ad-hoc 签名的 `.app` 打成 DMG（见「分发」一节）；代码签名、公证和自动更新尚缺，接收方需手动绕过 Gatekeeper（右键 → 打开，或 `xattr -cr com.apple.quarantine`）。
 - **固定端口不可用时客户端持久化状态会重置**：localStorage 按 origin 隔离，回退到 OS 分配端口的那次启动草稿与视图状态为空（spec 将其标记为可观测）。
 - **无页面缩放**（Cmd+=/-），窗口标题可能不跟随 `document.title`；两者均为 MVP 接受项。
 - **`target="_blank"` 链接**：外部 http(s) 经壳的导航处理器委托给系统浏览器；WKWebView 在导航前吞掉的新窗口路径是已知缺口，等待上游 wry 支持。

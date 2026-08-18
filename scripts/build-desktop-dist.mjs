@@ -1,18 +1,17 @@
 /**
  * Produce the distributable dsh desktop artifact: run the desktop build chain
- * and package the re-signed .app into a versioned, arch-tagged zip and DMG.
+ * and package the re-signed .app into a versioned, arch-tagged DMG.
  *
  * Chain: entry gates → `pnpm run build` → `pnpm run desktop:runtime` →
- * `pnpm run desktop:build` → ditto zip → ditto verify → hdiutil DMG.
- * Each package script is spawned through pnpm so its env prefix stays with its
- * owner (`desktop:build` carries its own `npm_config_verify_deps_before_run=false`).
+ * `pnpm run desktop:build` → hdiutil DMG. Each package script is spawned
+ * through pnpm so its env prefix stays with its owner (`desktop:build` carries
+ * its own `npm_config_verify_deps_before_run=false`).
  *
- * The zip is cut from the re-signed .app with `ditto -c -k --keepParent`:
- * tauri's own bundling runs before the runtime injection and the re-sign, and
- * plain `zip -r` dereferences the pnpm symlink layout inside the runtime
- * tree. The DMG is cut with `hdiutil create` from a staging folder that
- * includes an `/Applications` symlink for drag-and-drop installation.
- * The contract is `openspec/changes/add-desktop-dist/` (spec `desktop-dist`).
+ * The DMG is cut with `hdiutil create` from a staging folder that includes an
+ * `/Applications` symlink for drag-and-drop installation. Tauri's own bundling
+ * runs before the runtime injection and the re-sign, so the .app is taken
+ * post-injection and post-re-sign. The contract is
+ * `openspec/changes/add-desktop-dist/` (spec `desktop-dist`).
  *
  * Usage: `node scripts/build-desktop-dist.mjs [--skip-build]`; `--skip-build`
  * reuses existing lib/ artifacts without re-running `pnpm run build`.
@@ -85,13 +84,13 @@ function cargoVersion() {
   fail(`no [package] version key in ${cargoTomlPath}`)
 }
 
-console.log('[1/7] entry gates')
+console.log('[1/6] entry gates')
 const version = tauriVersion()
 const cargo = cargoVersion()
 if (version !== cargo) {
   fail(`desktop version mismatch: tauri.conf.json says "${version}", Cargo.toml says "${cargo}"`)
 }
-// x64 is the only validated target; an unvalidated zip with a legitimate
+// x64 is the only validated target; an unvalidated artifact with a legitimate
 // name on a Release is the failure path this gate closes. A Rosetta host
 // reports x64, which is self-consistent: the toolchain that runs builds.
 if (process.arch !== 'x64') {
@@ -105,7 +104,7 @@ if (skipBuild && !existsSync(cliLibEntry)) {
   fail(`--skip-build requires built lib/ artifacts; ${cliLibEntry} is missing — run without the flag`)
 }
 
-console.log('[2/7] building workspace libraries')
+console.log('[2/6] building workspace libraries')
 // CI keeps every nested pnpm non-interactive (a purge confirmation aborts
 // without a TTY), and the disabled deps-status pre-check stops pnpm from
 // "fixing" the modules state a previous deploy deliberately rewrote — the
@@ -118,58 +117,33 @@ const pnpmEnv = {
 if (skipBuild) console.log('skipping pnpm run build (--skip-build)')
 else run('pnpm', ['run', 'build'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[3/7] deploying the runtime')
+console.log('[3/6] deploying the runtime')
 run('pnpm', ['run', 'desktop:runtime'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[4/7] assembling the .app')
+console.log('[4/6] assembling the .app')
 run('pnpm', ['run', 'desktop:build'], { cwd: repoRoot, env: pnpmEnv })
 
-console.log('[5/7] zipping the re-signed .app')
-const zipPath = join(distDir, `dsh-desktop_${version}_${process.arch}.zip`)
-run('ditto', ['-c', '-k', '--keepParent', appBundle, zipPath])
-
-console.log('[6/7] verifying the archive')
-const expandDir = join(distDir, 'verify-expand')
-let verifyError
-try {
-  const expand = spawnSync('ditto', ['-x', '-k', zipPath, expandDir])
-  check(expand.status === 0, `archive expansion failed (ditto -x exited ${expand.status})`)
-  const expanded = readdirSync(expandDir, { withFileTypes: true })
-  check(
-    expanded.length === 1 && expanded[0].name === 'dsh-desktop.app' && expanded[0].isDirectory(),
-    `archive holds unexpected top-level entries: ${expanded.map(entry => entry.name).join(', ')}`,
-  )
-  const expandedApp = join(expandDir, 'dsh-desktop.app')
-  check(existsSync(join(expandedApp, runtimeEntryRel)), `runtime entry missing in the expanded archive: ${runtimeEntryRel}`)
-  const modules = join(expandedApp, 'Contents/Resources/runtime/node_modules')
-  const pnpmDir = join(modules, '.pnpm')
-  // pnpm's deploy --prod --legacy layout stores packages directly under
-  // @scope/name (directories, not symlinks) and keeps self-referential links
-  // inside .pnpm/<hash>/node_modules/. Top-level isSymbolicLink would miss
-  // them; check inside .pnpm instead.
-  check(existsSync(pnpmDir), 'no .pnpm directory under the expanded runtime node_modules; the archive is missing the pnpm store')
-  let foundSymlink = false
-  for (const entry of readdirSync(pnpmDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const innerModules = join(pnpmDir, entry.name, 'node_modules')
-    if (!existsSync(innerModules)) continue
-    for (const inner of readdirSync(innerModules, { withFileTypes: true })) {
-      if (inner.isSymbolicLink()) { foundSymlink = true; break }
-    }
-    if (foundSymlink) break
+console.log('[5/6] verifying the .app')
+const modules = join(appBundle, 'Contents/Resources/runtime/node_modules')
+const pnpmDir = join(modules, '.pnpm')
+check(existsSync(join(appBundle, runtimeEntryRel)), `runtime entry missing: ${runtimeEntryRel}`)
+check(existsSync(pnpmDir), 'no .pnpm directory under runtime node_modules; the deploy is incomplete')
+let foundSymlink = false
+for (const entry of readdirSync(pnpmDir, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue
+  const innerModules = join(pnpmDir, entry.name, 'node_modules')
+  if (!existsSync(innerModules)) continue
+  for (const inner of readdirSync(innerModules, { withFileTypes: true })) {
+    if (inner.isSymbolicLink()) { foundSymlink = true; break }
   }
-  check(foundSymlink, 'no symbolic links found under the expanded runtime .pnpm; the archive dereferenced the pnpm layout')
-  const signed = spawnSync('codesign', ['--verify', expandedApp], { stdio: 'ignore' })
-  check(signed.status === 0, 'codesign --verify failed on the expanded app')
-} catch (error) {
-  verifyError = error
-} finally {
-  rmSync(expandDir, { recursive: true, force: true })
+  if (foundSymlink) break
 }
-if (verifyError !== undefined) fail(verifyError.message)
+check(foundSymlink, 'no symbolic links found under runtime .pnpm; the deploy dereferenced the pnpm layout')
+const signed = spawnSync('codesign', ['--verify', appBundle], { stdio: 'ignore' })
+check(signed.status === 0, 'codesign --verify failed on the .app')
 
-console.log('[7/7] creating the DMG')
-// Stage the .app alongside an /Applications symlink for drag-to-Install.
+console.log('[6/6] creating the DMG')
+// Stage the .app alongside an /Applications symlink for drag-to-install.
 const dmgStaging = mkdtempSync(join(tmpdir(), 'dsh-desktop-dmg-'))
 const dmgAppDir = join(dmgStaging, 'dsh-desktop.app')
 const dmgAppsLink = join(dmgStaging, 'Applications')
@@ -185,13 +159,9 @@ try {
   rmSync(dmgStaging, { recursive: true, force: true })
 }
 
-const sizeZip = spawnSync('du', ['-sh', zipPath], { encoding: 'utf8' })
-const checksumZip = spawnSync('shasum', ['-a', '256', zipPath], { encoding: 'utf8' })
 const dmgPath = join(distDir, `dsh-desktop_${version}_${process.arch}.dmg`)
 const sizeDmg = spawnSync('du', ['-sh', dmgPath], { encoding: 'utf8' })
 const checksumDmg = spawnSync('shasum', ['-a', '256', dmgPath], { encoding: 'utf8' })
-console.log(`build-desktop-dist: ok → ${zipPath} (${sizeZip.stdout.trim().split('\t')[0]})`)
-console.log(`sha256: ${checksumZip.stdout.trim().split(/\s+/)[0]}`)
 console.log(`build-desktop-dist: ok → ${dmgPath} (${sizeDmg.stdout.trim().split('\t')[0]})`)
 console.log(`sha256: ${checksumDmg.stdout.trim().split(/\s+/)[0]}`)
 console.log('unsigned build: receivers bypass Gatekeeper per desktop/README.md#distribution (right-click → Open, or xattr -cr com.apple.quarantine)')
