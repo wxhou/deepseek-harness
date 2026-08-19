@@ -422,3 +422,12 @@
       name: '@deepseek-ai/dsh-agent-presets'
       config:
         default: standard
+
+# The plugin market: shipped as a runtime dep so a desktop .app binary carries
+# it out of the box (the inject Runtime closure is bound by `desktop:runtime`).
+# The same row is what `dsh plugin --profile web add dshmarket` writes to
+# `~/.dsh/profiles/web/cordis.patch.yml`; inlining it here keeps the bundle
+# composed and avoids a separate install step on first launch.
+- insert:
+    - id: dsh-market
+      name: 'dshmarket'
